@@ -805,11 +805,10 @@ export const toggleBookmark = async (req, res) => {
     }
 
     if (isBookmarked) {
-      user.bookmarks.pull(id);
+      await User.updateOne({ _id: userId }, { $pull: { bookmarks: id } });
     } else {
-      user.bookmarks.push(id);
+      await User.updateOne({ _id: userId }, { $addToSet: { bookmarks: id } });
     }
-    await user.save({ validateBeforeSave: false });
     res.status(200).json({
       success: true,
       bookmarked: !isBookmarked,

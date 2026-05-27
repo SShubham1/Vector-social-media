@@ -331,6 +331,66 @@ describe('Post and Comment Flows', () => {
     });
   });
 
+  describe('Bookmark Toggle', () => {
+    it('should bookmark and then unbookmark a post', async () => {
+      // Bookmark
+      const bookmarkRes = await request(app)
+        .post(`/api/posts/${post._id}/bookmark`)
+        .set('Cookie', cookie);
+
+      expect(bookmarkRes.status).toBe(200);
+      expect(bookmarkRes.body.success).toBe(true);
+      expect(bookmarkRes.body.bookmarked).toBe(true);
+      expect(bookmarkRes.body.message).toBe("Added to bookmarks");
+
+      // Verify in user bookmarks
+      let updatedUser = await User.findById(user._id);
+      expect(updatedUser.bookmarks.map(String)).toContain(post._id.toString());
+
+      // Unbookmark
+      const unbookmarkRes = await request(app)
+        .post(`/api/posts/${post._id}/bookmark`)
+        .set('Cookie', cookie);
+
+      expect(unbookmarkRes.status).toBe(200);
+      expect(unbookmarkRes.body.success).toBe(true);
+      expect(unbookmarkRes.body.bookmarked).toBe(false);
+      expect(unbookmarkRes.body.message).toBe("Removed from bookmarks");
+
+      // Verify in user bookmarks
+      updatedUser = await User.findById(user._id);
+      expect(updatedUser.bookmarks.map(String)).not.toContain(post._id.toString());
+    });
+
+    it('should handle concurrent bookmark requests without losing updates', async () => {
+      // Create another post
+      const post2 = await Post.create({
+        author: user._id,
+        content: "Second Post Content",
+        intent: "share"
+      });
+
+      // Send concurrent requests to bookmark post and post2
+      const [res1, res2] = await Promise.all([
+        request(app)
+          .post(`/api/posts/${post._id}/bookmark`)
+          .set('Cookie', cookie),
+        request(app)
+          .post(`/api/posts/${post2._id}/bookmark`)
+          .set('Cookie', cookie)
+      ]);
+
+      expect(res1.status).toBe(200);
+      expect(res2.status).toBe(200);
+
+      // Verify that BOTH posts are in the bookmarks array
+      const updatedUser = await User.findById(user._id);
+      const bookmarksStr = updatedUser.bookmarks.map(String);
+      expect(bookmarksStr).toContain(post._id.toString());
+      expect(bookmarksStr).toContain(post2._id.toString());
+    });
+  });
+
   describe('Comment Counts', () => {
     it('should increment and decrement comment count', async () => {
       // Add comment
