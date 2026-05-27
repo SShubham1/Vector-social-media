@@ -170,13 +170,14 @@ export const searchPosts = async (req, res) => {
         }
 
         let filter = { $text: { $search: q } };
+        let excludeUserIds = [];
         
         if (req.user) {
             const currentUserId = req.user._id || req.user.id;
             const blockers = await User.find({ blockedUsers: currentUserId }).select("_id");
             const blockerIds = blockers.map(u => u._id);
             const blockedIds = req.user.blockedUsers || [];
-            let excludeUserIds = [...blockedIds, ...blockerIds];
+            excludeUserIds = [...blockedIds, ...blockerIds];
 
             if (excludeUserIds.length > 0) {
                 filter.author = { $nin: excludeUserIds };
