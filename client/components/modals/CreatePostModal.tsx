@@ -64,7 +64,7 @@ export default function CreatePostModal({onClose,onPostCreated}: CreateModalProp
 
         return () => clearInterval(interval);
     }, [content, intent]);
-    
+
     const handleClose = () => {
         setVisible(false);
         setTimeout(onClose, 200);
@@ -281,6 +281,18 @@ export default function CreatePostModal({onClose,onPostCreated}: CreateModalProp
                     )}>
                         {content.length} / {MAX_CHARS}
                     </div>
+
+                    {lastSaved && (
+                        <div className="text-xs mt-1 text-foreground/50">
+                            Last saved at {lastSaved.toLocaleTimeString()}
+                        </div>
+                    )}
+
+                    {autoSaveStatus && (
+                        <div className="text-xs text-green-500 mt-1">
+                            {autoSaveStatus}
+                        </div>
+                    )}
 
                     {/* Drop Zone - Visible when no image selected */}
                     {!imagePreview && (
