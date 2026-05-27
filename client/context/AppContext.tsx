@@ -172,11 +172,30 @@ export function AppContextProvider({
       );
     };
 
+    const onBlockCommentsCleaned = (data: {
+      targetUserId: string;
+      commentRemovals: Array<{ postId: string; count: number }>;
+    }) => {
+      if (!data?.commentRemovals?.length) return;
+
+      setPosts((prev) =>
+        prev.map((p) => {
+          const removal = data.commentRemovals.find((r) => r.postId === p._id);
+          if (!removal) return p;
+          return {
+            ...p,
+            commentsCount: Math.max(0, (p.commentsCount || 0) - removal.count),
+          };
+        })
+      );
+    };
+
     socket.on("connect", onConnect);
     socket.on("user:blocked", onBlocked);
     socket.on("user:unblocked", onUnblocked);
     socket.on("bookmarks:invalidated", onBookmarksInvalidated);
     socket.on("block:likes_cleaned", onBlockLikesCleaned);
+    socket.on("block:comments_cleaned", onBlockCommentsCleaned);
 
     socket.emit("register", userData.id);
 
@@ -186,6 +205,7 @@ export function AppContextProvider({
       socket.off("user:unblocked", onUnblocked);
       socket.off("bookmarks:invalidated", onBookmarksInvalidated);
       socket.off("block:likes_cleaned", onBlockLikesCleaned);
+      socket.off("block:comments_cleaned", onBlockCommentsCleaned);
       socket.disconnect();
     };
   }, [userData?.id]);

@@ -884,6 +884,20 @@ export const blockUser = async (req, res) => {
         io.to(targetUserId).emit("bookmarks:invalidated", { userId: currentUserId });
         io.to(currentUserId).emit("block:likes_cleaned", { targetUserId, postIds: targetUserPostIds.map(String) });
         io.to(targetUserId).emit("block:likes_cleaned", { targetUserId: currentUserId, postIds: currentUserPostIds.map(String) });
+        io.to(currentUserId).emit("block:comments_cleaned", {
+            targetUserId,
+            commentRemovals: blockedOnCurrentCounts.map(({ _id, count }) => ({
+                postId: _id.toString(),
+                count,
+            })),
+        });
+        io.to(targetUserId).emit("block:comments_cleaned", {
+            targetUserId: currentUserId,
+            commentRemovals: blockerOnTargetCounts.map(({ _id, count }) => ({
+                postId: _id.toString(),
+                count,
+            })),
+        });
 
         return res.json({
             success: true,
