@@ -62,13 +62,7 @@ export default function CommentsSection({ postId }: { postId: string }) {
             setCursor(data.nextCursor);
         } catch (err: unknown) {
             console.error("Error fetching comments:", err);
-            if (axios.isAxiosError(err)) {
-                setError(err.response?.data?.message || err.message || "Failed to load comments.");
-            } else if (err instanceof Error) {
-                setError(err.message);
-            } else {
-                setError("Failed to load comments.");
-            }
+            setError(getErrorMessage(err, "Failed to load comments."));
         } finally {
             setLoading(false);
         }
