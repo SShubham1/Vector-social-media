@@ -60,6 +60,38 @@ export default function RegistrationForm() {
 
 const cleanedPhone = phoneNumber.replace(/[\s-]/g, "");
 
+if (!name.trim()) {
+      return setFormError("Enter first name");
+    }
+    if (!surname.trim()) {
+      return setFormError("Enter last name");
+    }
+    if (!email.trim()) {
+      return setFormError("Enter email");
+    }
+    if (!emailRegex.test(email.trim())) {
+      return setFormError("Please enter a valid email!");
+    }
+    if (!phoneNumber.trim()) {
+      return setFormError("Enter phone number");
+    }
+    if (!phoneRegex.test(cleanedPhone)) {
+      return setFormError("Please enter a valid phone number!");
+    }
+    if (!password.trim()) {
+      return setFormError("Enter password");
+    }
+    if (password.length < 6) {
+      return setFormError("Password must be at least 6 characters!");
+    }
+    if (!passwordRegex.test(password)) {
+      return setFormError(
+        "Password must contain at least one uppercase letter, one lowercase letter, and one number!"
+      );
+    }
+    if (password !== confirmPassword) {
+      return setFormError("Passwords do not match");
+    }
 
 if (!phoneNumber.trim()) {
   return setFormError("Enter phone number");
