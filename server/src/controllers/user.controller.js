@@ -320,10 +320,10 @@ export const acceptFollowRequest = async (req, res) => {
         let acceptedFollow = null;
         let notification = null;
 
-        await session.withTransaction(async () => {
+        const performAccept = async (opts = {}) => {
             const [user, requesterDoc] = await Promise.all([
-                User.findById(currentUserId).select("blockedUsers").session(session),
-                User.findById(requesterId).select("blockedUsers").session(session),
+                User.findById(currentUserId).select("blockedUsers"),
+                User.findById(requesterId).select("blockedUsers"),
             ]);
 
             if (!user) {
@@ -355,23 +355,47 @@ export const acceptFollowRequest = async (req, res) => {
             acceptedFollow = await Follow.findOneAndUpdate(
                 { follower: requesterId, following: currentUserId, status: "pending" },
                 { $set: { status: "accepted" } },
-                { new: true, session }
+                { new: true, ...opts }
             );
 
             if (!acceptedFollow) return;
 
             await Promise.all([
-                User.updateOne({ _id: currentUserId }, { $inc: { followersCount: 1 } }, { session }),
-                User.updateOne({ _id: requesterId }, { $inc: { followingCount: 1 } }, { session }),
+                User.updateOne({ _id: currentUserId }, { $inc: { followersCount: 1 } }, opts),
+                User.updateOne({ _id: requesterId }, { $inc: { followingCount: 1 } }, opts),
             ]);
 
-            // Idempotent notification (unique partial index enforces no duplicates).
-            notification = await Notification.findOneAndUpdate(
+            const existing = await Notification.findOneAndUpdate(
                 { recipient: requesterId, sender: currentUserId, type: "follow_request_accepted" },
                 { $setOnInsert: { recipient: requesterId, sender: currentUserId, type: "follow_request_accepted" } },
-                { new: true, upsert: true, session, setDefaultsOnInsert: true }
+                { upsert: true, returnDocument: "before", ...opts }
             );
-        });
+
+            if (!existing) {
+                notification = await Notification.findOne({
+                    recipient: requesterId,
+                    sender: currentUserId,
+                    type: "follow_request_accepted",
+                });
+            }
+        };
+
+        try {
+            await session.withTransaction(async () => {
+                await performAccept({ session });
+            });
+        } catch (error) {
+            // mongodb-memory-server (and some standalone Mongo deployments) do not support transactions.
+            // Fall back to non-transactional atomic update + idempotent notification.
+            const message = String(error?.message || "");
+            const txNotSupported =
+                message.includes("Transaction numbers are only allowed") ||
+                message.includes("transactions are not supported");
+
+            if (!txNotSupported) throw error;
+
+            await performAccept();
+        }
 
         if (!acceptedFollow) {
             return res.status(400).json({ message: "No follow request from this user" });
