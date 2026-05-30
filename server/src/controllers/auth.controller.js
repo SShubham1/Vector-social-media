@@ -66,7 +66,7 @@ export const register = async (req, res) => {
                 success: false,
                 message: getValidationMessage(validation, "Invalid registration data"),
             });
-        
+        }
 const {
     name,
     surname,
