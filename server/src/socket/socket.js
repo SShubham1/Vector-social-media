@@ -9,6 +9,34 @@ import cookie from "cookie";
 
 let io;
 
+export const shouldUseRedisAdapter = (redisUrl = process.env.REDIS_URL) =>
+  typeof redisUrl === "string" && redisUrl.trim().length > 0;
+
+const setupRedisAdapter = async (socketServer) => {
+  if (!shouldUseRedisAdapter()) {
+    return false;
+  }
+
+  const redisUrl = process.env.REDIS_URL.trim();
+  const pubClient = createClient({ url: redisUrl });
+  const subClient = pubClient.duplicate();
+
+  pubClient.on("error", (err) => console.error("Redis Pub Client Error", err));
+  subClient.on("error", (err) => console.error("Redis Sub Client Error", err));
+
+  try {
+    await Promise.all([pubClient.connect(), subClient.connect()]);
+    socketServer.adapter(createAdapter(pubClient, subClient));
+    return true;
+  } catch (err) {
+    console.warn("Socket.io Redis adapter unavailable; continuing with in-memory adapter.", err);
+    await Promise.allSettled([
+      pubClient.disconnect?.(),
+      subClient.disconnect?.(),
+    ]);
+    return false;
+  }
+};
 export const initSocket = async (server) => {
   io = new Server(server, {
     cors: {
@@ -17,15 +45,7 @@ export const initSocket = async (server) => {
     },
   });
 
-  const pubClient = createClient({ url: process.env.REDIS_URL || "redis://localhost:6379" });
-  const subClient = pubClient.duplicate();
-
-  pubClient.on("error", (err) => console.error("Redis Pub Client Error", err));
-  subClient.on("error", (err) => console.error("Redis Sub Client Error", err));
-
-  await Promise.all([pubClient.connect(), subClient.connect()]);
-
-  io.adapter(createAdapter(pubClient, subClient));
+  await setupRedisAdapter(io);
 
   io.use(async (socket, next) => {
     try {
@@ -59,12 +79,12 @@ export const initSocket = async (server) => {
   });
 
   io.on("connection", (socket) => {
-
     socket.on("register", () => {
       if (socket.userId) {
         socket.join(socket.userId);
       }
     });
+
     socket.on("typing", async ({ conversationId, receiverId }) => {
       try {
         if (
@@ -73,7 +93,6 @@ export const initSocket = async (server) => {
           !mongoose.Types.ObjectId.isValid(receiverId)
         ) return;
 
-        // Verify both socket.userId and receiverId are actual participants
         const conversation = await Conversation.findOne({
           _id: conversationId,
           participants: { $all: [socket.userId, receiverId] },
