@@ -8,6 +8,9 @@ import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getErrorMessage } from "@/lib/error";
 
+// Same rule as registerSchema and resetPasswordSchema on the backend
+const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{6,}$/;
+
 export default function ResetPasswordPage({
     params,
 }: {
@@ -29,6 +32,12 @@ export default function ResetPasswordPage({
         }
         if (newPassword.length < 6) {
             toast.warn("Password must be at least 6 characters!");
+            return;
+        }
+        if (!PASSWORD_REGEX.test(newPassword)) {
+            toast.warn(
+                "Password must contain at least one uppercase letter, one lowercase letter, and one number!"
+            );
             return;
         }
         try {
@@ -76,6 +85,9 @@ export default function ResetPasswordPage({
                         {showPassword ? <Eye size={18} /> : <EyeOff size={18} />}
                     </span>
                 </div>
+                <p className="text-xs surface-text-muted mt-1">
+                    Must be 6+ characters with uppercase, lowercase, and a number.
+                </p>
 
                 <Button
                     disabled={loading}
