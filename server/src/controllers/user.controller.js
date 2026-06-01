@@ -812,134 +812,187 @@ export const searchUsers = async (req, res) => {
 };
 
 export const blockUser = async (req, res) => {
+    const currentUserId = req.user.id;
+    const targetUserId = req.params.id;
+
+    if (currentUserId === targetUserId) {
+        return res.status(400).json({ message: "You cannot block yourself" });
+    }
+
+    // All writes run inside a single MongoDB transaction so a partial failure
+    // cannot leave the database in an inconsistent state (e.g. block recorded
+    // but follow relationships not cleaned up, or counts drifting out of sync).
+    const session = await mongoose.startSession();
+
+    // Variables populated inside the transaction and needed after commit for
+    // socket events (socket.io must not be called while the transaction is open).
+    let targetUserPostIds = [];
+    let currentUserPostIds = [];
+    let blockedOnCurrentCounts = [];
+    let blockerOnTargetCounts = [];
+    let alreadyBlocked = false;
+
     try {
-        const currentUserId = req.user.id;
-        const targetUserId = req.params.id;
+        await session.withTransaction(async () => {
+            const currentUser = await User.findById(currentUserId).session(session);
+            const targetUser = await User.findById(targetUserId).session(session);
 
-        if (currentUserId === targetUserId) {
-            return res.status(400).json({
-                message: "You cannot block yourself"
-            });
-        }
+            if (!currentUser || !targetUser) {
+                const err = new Error("User not found");
+                err.status = 404;
+                throw err;
+            }
 
-        const currentUser = await User.findById(currentUserId);
-        const targetUser = await User.findById(targetUserId);
+            alreadyBlocked = currentUser.blockedUsers?.some(
+                (id) => id.toString() === targetUserId
+            );
+            if (alreadyBlocked) return;
 
-        if (!currentUser || !targetUser) {
-            return res.status(404).json({
-                message: "User not found"
-            });
-        }
-
-        const isAlreadyBlocked = currentUser.blockedUsers?.some(id => id.toString() === targetUserId);
-        if (isAlreadyBlocked) {
-            return res.status(400).json({
-                message: "User is already blocked"
-            });
-        }
-
-        // Add to blockedUsers list
-        await User.updateOne(
-            { _id: currentUserId },
-            { $addToSet: { blockedUsers: targetUserId } }
-        );
-
-        const followingEachOther1 = await Follow.findOne({ follower: currentUserId, following: targetUserId, status: "accepted" });
-        if (followingEachOther1) {
-            await User.updateOne({ _id: currentUserId }, { $inc: { followingCount: -1 } });
-            await User.updateOne({ _id: targetUserId }, { $inc: { followersCount: -1 } });
-        }
-        
-        const followingEachOther2 = await Follow.findOne({ follower: targetUserId, following: currentUserId, status: "accepted" });
-        if (followingEachOther2) {
-            await User.updateOne({ _id: targetUserId }, { $inc: { followingCount: -1 } });
-            await User.updateOne({ _id: currentUserId }, { $inc: { followersCount: -1 } });
-        }
-
-        await Follow.deleteMany({
-            $or: [
-                { follower: currentUserId, following: targetUserId },
-                { follower: targetUserId, following: currentUserId }
-            ]
-        });
-
-        // Remove any active notifications related to these two
-        await Notification.deleteMany({
-            $or: [
-                { recipient: currentUserId, sender: targetUserId },
-                { recipient: targetUserId, sender: currentUserId }
-            ]
-        });
-
-        // Delete conversations and messages between the two users
-        const conversations = await Conversation.find({
-            participants: { $all: [currentUserId, targetUserId] }
-        });
-        const conversationIds = conversations.map(c => c._id);
-        if (conversationIds.length > 0) {
-            await Message.deleteMany({ conversation: { $in: conversationIds } });
-            await Conversation.deleteMany({ _id: { $in: conversationIds } });
-        }
-
-        // Remove the blocked user's likes from the blocker's posts
-        await Post.updateMany(
-            { author: currentUserId },
-            { $pull: { likes: targetUserId } }
-        );
-
-        // Remove the blocker's likes from the blocked user's posts
-        await Post.updateMany(
-            { author: targetUserId },
-            { $pull: { likes: currentUserId } }
-        );
-
-        // Remove bookmarks between the two users
-        const [currentUserPosts, targetUserPosts] = await Promise.all([
-            Post.find({ author: currentUserId }).select("_id").lean(),
-            Post.find({ author: targetUserId }).select("_id").lean(),
-        ]);
-        const currentUserPostIds = currentUserPosts.map(p => p._id);
-        const targetUserPostIds = targetUserPosts.map(p => p._id);
-
-        // Remove comments in both directions and keep commentsCount accurate
-        const [blockedOnCurrentCounts, blockerOnTargetCounts] = await Promise.all([
-            Comment.aggregate([
-                { $match: { post: { $in: currentUserPostIds }, author: targetUser._id } },
-                { $group: { _id: "$post", count: { $sum: 1 } } },
-            ]),
-            Comment.aggregate([
-                { $match: { post: { $in: targetUserPostIds }, author: currentUser._id } },
-                { $group: { _id: "$post", count: { $sum: 1 } } },
-            ]),
-        ]);
-
-        await Promise.all([
-            Comment.deleteMany({ post: { $in: currentUserPostIds }, author: targetUser._id }),
-            Comment.deleteMany({ post: { $in: targetUserPostIds }, author: currentUser._id }),
-        ]);
-
-        const commentCountUpdates = [
-            ...blockedOnCurrentCounts.map(({ _id, count }) => ({
-                updateOne: { filter: { _id }, update: { $inc: { commentsCount: -count } } },
-            })),
-            ...blockerOnTargetCounts.map(({ _id, count }) => ({
-                updateOne: { filter: { _id }, update: { $inc: { commentsCount: -count } } },
-            })),
-        ];
-        if (commentCountUpdates.length) {
-            await Post.bulkWrite(commentCountUpdates, { ordered: false });
-        }
-        await Promise.all([
-            User.updateOne(
+            // Record the block atomically — $addToSet is idempotent
+            await User.updateOne(
                 { _id: currentUserId },
-                { $pull: { bookmarks: { $in: targetUserPostIds } } }
-            ),
-            User.updateOne(
-                { _id: targetUserId },
-                { $pull: { bookmarks: { $in: currentUserPostIds } } }
-            ),
-        ]);
+                { $addToSet: { blockedUsers: targetUserId } },
+                { session }
+            );
 
+            // Count active follow relationships before deleting them so follower
+            // and following counts can be decremented accurately
+            const [fwd, rev] = await Promise.all([
+                Follow.findOne(
+                    { follower: currentUserId, following: targetUserId, status: "accepted" },
+                    null,
+                    { session }
+                ),
+                Follow.findOne(
+                    { follower: targetUserId, following: currentUserId, status: "accepted" },
+                    null,
+                    { session }
+                ),
+            ]);
+
+            if (fwd) {
+                await Promise.all([
+                    User.updateOne({ _id: currentUserId }, { $inc: { followingCount: -1 } }, { session }),
+                    User.updateOne({ _id: targetUserId }, { $inc: { followersCount: -1 } }, { session }),
+                ]);
+            }
+            if (rev) {
+                await Promise.all([
+                    User.updateOne({ _id: targetUserId }, { $inc: { followingCount: -1 } }, { session }),
+                    User.updateOne({ _id: currentUserId }, { $inc: { followersCount: -1 } }, { session }),
+                ]);
+            }
+
+            await Follow.deleteMany(
+                {
+                    $or: [
+                        { follower: currentUserId, following: targetUserId },
+                        { follower: targetUserId, following: currentUserId },
+                    ],
+                },
+                { session }
+            );
+
+            // Remove notifications between the two users
+            await Notification.deleteMany(
+                {
+                    $or: [
+                        { recipient: currentUserId, sender: targetUserId },
+                        { recipient: targetUserId, sender: currentUserId },
+                    ],
+                },
+                { session }
+            );
+
+            // Delete shared conversations and their messages
+            const conversations = await Conversation.find(
+                { participants: { $all: [currentUserId, targetUserId] } },
+                null,
+                { session }
+            );
+            const conversationIds = conversations.map((c) => c._id);
+            if (conversationIds.length > 0) {
+                await Message.deleteMany({ conversation: { $in: conversationIds } }, { session });
+                await Conversation.deleteMany({ _id: { $in: conversationIds } }, { session });
+            }
+
+            // Gather post IDs for like/bookmark/comment cleanup
+            const [cPosts, tPosts] = await Promise.all([
+                Post.find({ author: currentUserId }, "_id", { session }).lean(),
+                Post.find({ author: targetUserId }, "_id", { session }).lean(),
+            ]);
+            currentUserPostIds = cPosts.map((p) => p._id);
+            targetUserPostIds = tPosts.map((p) => p._id);
+
+            // Remove mutual likes
+            await Promise.all([
+                Post.updateMany(
+                    { author: currentUserId },
+                    { $pull: { likes: targetUserId } },
+                    { session }
+                ),
+                Post.updateMany(
+                    { author: targetUserId },
+                    { $pull: { likes: currentUserId } },
+                    { session }
+                ),
+            ]);
+
+            // Count and remove mutual comments to keep commentsCount accurate
+            [blockedOnCurrentCounts, blockerOnTargetCounts] = await Promise.all([
+                Comment.aggregate([
+                    { $match: { post: { $in: currentUserPostIds }, author: targetUser._id } },
+                    { $group: { _id: "$post", count: { $sum: 1 } } },
+                ]).session(session),
+                Comment.aggregate([
+                    { $match: { post: { $in: targetUserPostIds }, author: currentUser._id } },
+                    { $group: { _id: "$post", count: { $sum: 1 } } },
+                ]).session(session),
+            ]);
+
+            await Promise.all([
+                Comment.deleteMany(
+                    { post: { $in: currentUserPostIds }, author: targetUser._id },
+                    { session }
+                ),
+                Comment.deleteMany(
+                    { post: { $in: targetUserPostIds }, author: currentUser._id },
+                    { session }
+                ),
+            ]);
+
+            const commentCountUpdates = [
+                ...blockedOnCurrentCounts.map(({ _id, count }) => ({
+                    updateOne: { filter: { _id }, update: { $inc: { commentsCount: -count } } },
+                })),
+                ...blockerOnTargetCounts.map(({ _id, count }) => ({
+                    updateOne: { filter: { _id }, update: { $inc: { commentsCount: -count } } },
+                })),
+            ];
+            if (commentCountUpdates.length) {
+                await Post.bulkWrite(commentCountUpdates, { session, ordered: false });
+            }
+
+            // Remove cross-bookmarks
+            await Promise.all([
+                User.updateOne(
+                    { _id: currentUserId },
+                    { $pull: { bookmarks: { $in: targetUserPostIds } } },
+                    { session }
+                ),
+                User.updateOne(
+                    { _id: targetUserId },
+                    { $pull: { bookmarks: { $in: currentUserPostIds } } },
+                    { session }
+                ),
+            ]);
+        });
+
+        if (alreadyBlocked) {
+            return res.status(400).json({ message: "User is already blocked" });
+        }
+
+        // Emit socket events only after the transaction has committed
         const io = getIO();
         io.to(currentUserId).emit("user:blocked", { blockedUserId: targetUserId, blockerId: currentUserId });
         io.to(targetUserId).emit("user:blocked", { blockedUserId: currentUserId, blockerId: currentUserId });
@@ -962,15 +1015,14 @@ export const blockUser = async (req, res) => {
             })),
         });
 
-        return res.json({
-            success: true,
-            message: "User blocked successfully"
-        });
+        return res.json({ success: true, message: "User blocked successfully" });
     } catch (error) {
-        return res.status(500).json({
-            success: false,
-            message: error.message
-        });
+        if (error.status === 404) {
+            return res.status(404).json({ message: error.message });
+        }
+        return res.status(500).json({ success: false, message: error.message });
+    } finally {
+        session.endSession();
     }
 };
 
