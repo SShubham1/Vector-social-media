@@ -373,11 +373,15 @@ export const acceptFollowRequest = async (req, res) => {
             );
 
             if (!existing) {
-                notification = await Notification.findOne({
-                    recipient: requesterId,
-                    sender: currentUserId,
-                    type: "follow_request_accepted",
-                });
+                notification = await Notification.findOne(
+                    {
+                        recipient: requesterId,
+                        sender: currentUserId,
+                        type: "follow_request_accepted",
+                    },
+                    null,
+                    Object.keys(opts).length ? opts : undefined
+                );
             }
         };
 
