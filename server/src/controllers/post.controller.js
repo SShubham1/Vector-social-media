@@ -684,13 +684,12 @@ export const getSinglePost = asyncHandler(async (req, res) => {
         res.json(postObj);
    
 });
-
+  
 export const getTopPostsOfWeek = getTopPosts(7, MAX_LIMIT);
 
 export const getTopPostsOfMonth = getTopPosts(30, 3);
 
 export const incrementShare = asyncHandler(async (req, res) => {
-
         const postId = req.params.id;
         const userId = req.user.id || req.user._id;
 
