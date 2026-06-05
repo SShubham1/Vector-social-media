@@ -263,6 +263,24 @@ export const deleteMessage = async (req, res) => {
       });
     }
 
+    const conversation = await Conversation.findById(message.conversation);
+    if (conversation) {
+      const otherParticipant = conversation.participants.find(
+        p => p.toString() !== req.user._id.toString()
+      );
+      if (otherParticipant) {
+        const otherUser = await User.findById(otherParticipant).select("blockedUsers");
+        const isBlocked = req.user.blockedUsers?.some(
+          id => id.toString() === otherParticipant.toString()
+        ) || otherUser?.blockedUsers?.some(
+          id => id.toString() === req.user._id.toString()
+        );
+        if (isBlocked) {
+          return res.status(403).json({ message: "Action forbidden due to block status" });
+        }
+      }
+    }
+
     if (message.isDeleted) {
       return res.status(400).json({
         message: "Message already deleted"
@@ -276,8 +294,6 @@ export const deleteMessage = async (req, res) => {
 
     const io = getIO();
 
-    // Emit only to participants of this conversation, not every connected client
-    const conversation = await Conversation.findById(message.conversation);
     if (conversation) {
       conversation.participants.forEach((participantId) => {
         io.to(participantId.toString()).emit("message_deleted", {

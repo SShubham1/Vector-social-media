@@ -309,6 +309,27 @@ export const getUserConversations = async (req, res) => {
 
 export const deleteConversation = async (req, res) => {
     try {
+        const existingConvo = await Conversation.findOne({
+            _id: req.params.conversationId,
+            participants: req.user._id,
+        });
+        if (existingConvo) {
+            const otherParticipant = existingConvo.participants.find(
+                p => p.toString() !== req.user._id.toString()
+            );
+            if (otherParticipant) {
+                const otherUser = await User.findById(otherParticipant).select("blockedUsers");
+                const isBlocked = req.user.blockedUsers?.some(
+                    id => id.toString() === otherParticipant.toString()
+                ) || otherUser?.blockedUsers?.some(
+                    id => id.toString() === req.user._id.toString()
+                );
+                if (isBlocked) {
+                    return res.status(403).json({ message: "Action forbidden due to block status" });
+                }
+            }
+        }
+
         const convo = await Conversation.findOneAndUpdate(
             {
                 _id: req.params.conversationId,
