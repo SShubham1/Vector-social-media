@@ -12,6 +12,8 @@ import { uploadToCloudinary } from "../utils/uploadCleanup.js";
 import { cleanupTempUpload, IMAGE_UPLOAD_LIMITS, validateImageUpload } from "../utils/imageUploadValidation.js";
 import asyncHandler from "../utils/asyncHandler.js";
 
+const MAX_LIMIT = 50;
+
 export const uploadAvatar = async (req, res) => {
     let avatarPublicId = null;
     try {
@@ -359,11 +361,15 @@ export const acceptFollowRequest = async (req, res) => {
             );
 
             if (!existing) {
-                notification = await Notification.findOne({
-                    recipient: requesterId,
-                    sender: currentUserId,
-                    type: "follow_request_accepted",
-                });
+                notification = await Notification.findOne(
+                    {
+                        recipient: requesterId,
+                        sender: currentUserId,
+                        type: "follow_request_accepted",
+                    },
+                    null,
+                    Object.keys(opts).length ? opts : undefined
+                );
             }
         };
 
@@ -536,7 +542,7 @@ export const getFollowers = asyncHandler(async (req, res) => {
         }
 
         const cursor = req.query.cursor || null;
-        const limit = parseInt(req.query.limit) || 20;
+        const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), MAX_LIMIT);
 
         let filter = { following: req.params.id, status: "accepted" };
         if (cursor) {
@@ -595,7 +601,7 @@ export const getFollowing = asyncHandler(async (req, res) => {
         }
 
         const cursor = req.query.cursor || null;
-        const limit = parseInt(req.query.limit) || 20;
+        const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), MAX_LIMIT);
 
         let filter = { follower: req.params.id, status: "accepted" };
         if (cursor) {
@@ -886,6 +892,20 @@ export const blockUser = async (req, res) => {
                 Post.updateMany(
                     { author: targetUserId },
                     { $pull: { likes: currentUserId } },
+                    { session }
+                ),
+            ]);
+
+            // Remove mutual shares and decrement sharesCount accurately
+            await Promise.all([
+                Post.updateMany(
+                    { author: currentUserId, sharedBy: targetUserId },
+                    { $pull: { sharedBy: targetUserId }, $inc: { sharesCount: -1 } },
+                    { session }
+                ),
+                Post.updateMany(
+                    { author: targetUserId, sharedBy: currentUserId },
+                    { $pull: { sharedBy: currentUserId }, $inc: { sharesCount: -1 } },
                     { session }
                 ),
             ]);

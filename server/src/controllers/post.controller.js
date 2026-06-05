@@ -654,7 +654,7 @@ export const getTopPostsOfWeek = asyncHandler(async (req, res) => {
                     likes: { $setDifference: ["$likes", excludeUserIds] },
                     likesCount: { $size: { $setDifference: ["$likes", excludeUserIds] } },
                     commentsCount: { $ifNull: ["$commentsCount", 0] },
-                    sharesCount: { $ifNull: ["$sharesCount", 0] },
+                    sharesCount: { $size: { $setDifference: [{ $ifNull: ["$sharedBy", []] }, excludeUserIds] } },
                 },
             },
             {
@@ -744,7 +744,7 @@ export const getTopPostsOfMonth = asyncHandler(async (req, res) => {
                     likes: { $setDifference: ["$likes", excludeUserIds] },
                     likesCount: { $size: { $setDifference: ["$likes", excludeUserIds] } },
                     commentsCount: { $ifNull: ["$commentsCount", 0] },
-                    sharesCount: { $ifNull: ["$sharesCount", 0] },
+                    sharesCount: { $size: { $setDifference: [{ $ifNull: ["$sharedBy", []] }, excludeUserIds] } },
                 },
             },
             {
@@ -805,23 +805,46 @@ export const incrementShare = asyncHandler(async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid post ID format" });
         }
 
-        const post = await Post.findOneAndUpdate(
+        const post = await Post.findById(postId).select("author authorIsPrivate sharedBy sharesCount");
+        if (!post) {
+            return res.status(404).json({ success: false, message: "Post not found" });
+        }
+
+        if (post.author.toString() !== userId.toString()) {
+            const [authorUser, currentUser] = await Promise.all([
+                User.findById(post.author).select("blockedUsers"),
+                User.findById(userId).select("blockedUsers"),
+            ]);
+            const isBlocked = currentUser?.blockedUsers?.some(
+                id => id.toString() === post.author.toString()
+            ) || authorUser?.blockedUsers?.some(
+                id => id.toString() === userId.toString()
+            );
+            if (isBlocked) {
+                return res.status(403).json({ success: false, message: "Action forbidden due to block status" });
+            }
+
+            if (post.authorIsPrivate) {
+                const isFollower = await Follow.exists({ follower: userId, following: post.author, status: "accepted" });
+                if (!isFollower) {
+                    return res.status(403).json({ success: false, message: "This account is private. Follow to interact with their posts." });
+                }
+            }
+        }
+
+        const updatedPost = await Post.findOneAndUpdate(
             { _id: postId, sharedBy: { $ne: userId } },
             { $addToSet: { sharedBy: userId }, $inc: { sharesCount: 1 } },
             { new: true }
         );
 
-        if (!post) {
-            const exists = await Post.exists({ _id: postId });
-            if (!exists) {
-                return res.status(404).json({ success: false, message: "Post not found" });
-            }
+        if (!updatedPost) {
             return res.status(409).json({ success: false, message: "Already shared" });
         }
 
         res.json({
             success: true,
-            sharesCount: post.sharesCount,
+            sharesCount: updatedPost.sharesCount,
         });
    
 });

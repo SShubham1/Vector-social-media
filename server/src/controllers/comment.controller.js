@@ -5,18 +5,20 @@ import User from "../models/user.model.js";
 import Follow from "../models/follow.model.js";
 import Notification from "../models/notification.model.js";
 import { getIO } from "../socket/socket.js";
+import { commentSchema } from "../validators/comment.validator.js";
 import asyncHandler from "../utils/asyncHandler.js";
 // Hard upper bound on comments returned per request.
 const MAX_LIMIT = 50;
 
 export const addComment = asyncHandler(async (req, res) => {
         const { postId } = req.params;
-        const { content } = req.body;
-        if (!content?.trim()) {
+        const parsed = commentSchema.safeParse({ post: postId, content: req.body.content });
+        if (!parsed.success) {
             return res.status(400).json({
-                message: "Comment cannot be empty"
+                message: parsed.error.issues[0]?.message ?? "Invalid request",
             });
         }
+        const { content } = parsed.data;
         const post = await Post.findById(postId);
         if (!post) {
             return res.status(404).json({ message: "Post not found" });
