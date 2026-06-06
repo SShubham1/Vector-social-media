@@ -174,9 +174,9 @@ export default function CommentsSection({ postId, postAuthorId }: { postId: stri
 
                 {comments.map((c) => {
                     const isCommentAuthor =
-                        String(c.author?._id) === String(userData?.id);
+                        String(c.author?._id) === String(userData?._id);
                     const isPostAuthor =
-                        postAuthorId && String(postAuthorId) === String(userData?.id);
+                        postAuthorId && String(postAuthorId) === String(userData?._id);
                     const canDelete = isCommentAuthor || isPostAuthor;
 
                     return (
